@@ -445,4 +445,4 @@ vrrp_sync_group <STRING> {
 ```  
     
 # 配置示例  
-> [Keepalived 配置案例](../../docker/lab/LNMP-wordpress-02/LNMP-wordpress搭建-02.md#keepalived-实现两个-lvs-高可用)  
+> [Keepalived 配置案例](https://github.com/lxwcd/docker/blob/main/lab/LNMP-wordpress-02/LNMP-wordpress搭建-02.md#实验二keepalived-调度)  
