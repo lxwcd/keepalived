@@ -12,13 +12,42 @@ The main goal of this project is to provide simple and robust facilities for loa
 Keepalived 的负载均衡是基于 IPVS 模块提供的四层负载均衡能力  
 Keepalived 的高可用是通过 VRRP 协议实现  
 keepalived 适合无状态服务的通用高可用实现，不适合有状态服务，如 mysql  
+
+Keepalived 是**高可用（HA）软件**，底层基于 **VRRP 协议（虚拟路由冗余协议）**，用来实现**故障自动转移**，最常见搭配：LVS、Nginx。
+核心目标：解决单点故障，让 VIP（虚拟IP）自动漂移。
+
+Keepalived基于VRRP协议，搭建主备集群，实现VIP虚拟IP自动漂移；自带健康检查，业务故障自动切换，用来解决Nginx/LVS的单点故障。
     
 功能：  
 - 基于 VRRP 协议完成 VIP 地址流动  
 - 为 VIP 地址所在的的节点生成 IPVS 规则（IPVS 规则用户在配置文件中定义好）  
 - 为 IPVS 集群的各 RS 做健康检查  
 - 基于脚本调用接口完成脚本中定义的功能，进而影响集群事务，支持 nginx, haproxy 等服务  
-    
+
+注意：
+1. **virtual_router_id 不能冲突**：同一网段，不同VRRP组id不能一样，否则干扰。
+2. VRRP默认**组播**，跨网段需要特殊配置；很多云环境不支持组播，要用单播模式。
+3. 脑裂问题：
+    > 主备之间网络断了，但两台机器本身都正常。备机收不到通告，自己抢成Master。**结果：两台机器同时持有同一个VIP**（脑裂）。
+    > 解决：增加多路径健康检查、脚本检测、告警。
+4. Keepalived **不负责负载均衡**！只做高可用。负载均衡是Nginx/LVS的工作。
+
+## VRRP 
+- 多台服务器组成一个**VRRP组**，共用同一个 VIP（虚拟IP）。
+- 角色：**MASTER（主节点）、BACKUP（备节点）**
+  - Master：正常工作，持续向组内发**组播通告（advertisement）**，告诉备机“我活着”
+  - Backup：监听 Master 的通告
+  - 如果 Master 挂了，Backup 收不到通告，**自动选举出新的Master，VIP漂移到新主机**
+- 优先级：数值越大优先级越高，默认100；优先级高优先成为Master。
+
+注意：VRRP 是**三层协议**，只负责IP漂移，**不检测上层业务本身**（比如Nginx进程挂了，但机器还活着，VRRP不会切换）。Keepalived 扩展了健康检查来解决这个问题。
+
+## Keepalived 两大核心功能
+1. **VRRP 实现VIP漂移（高可用）**
+2. **Healthcheck 健康检查**
+    可以检测：进程、端口、脚本。
+    例：检测Nginx是否存活，如果Nginx挂了，本机Keepalived主动降低优先级/停止发送VRRP报文，主动让出VIP，让备机接管。
+
 # Keepalived 架构  
 > [Software Design](https://keepalived.org/doc/software_design.html)  
     
@@ -30,6 +59,7 @@ Keepalived 采用模块化设计，不同模块实现不同功能，主要模块
 1. **VRRP 协议**：  
    - Keepalived 使用 VRRP 协议来协调多个节点之间的状态，确保只有一个节点（主节点）在任何时刻处理流量，其他节点（备份节点）处于待命状态。  
    - 主备机制是通过 VRRP 中的虚拟路由器（Virtual Router）实现的。所有节点都加入一个 VRRP 组，每个组都有一个唯一的虚拟路由器 ID。  
+
 2. **虚拟 IP 地址（VIP）**：  
    - Keepalived 管理一个虚拟 IP 地址，这个 IP 地址对应于服务的入口点。在正常情况下，虚拟 IP 地址绑定到主节点。  
    - 备份节点通过 VRRP 协议监听主节点的状态，一旦检测到主节点不可用，备份节点将接管虚拟 IP 地址。  
@@ -387,7 +417,7 @@ notify_master "/etc/keepalived/notify.sh"
 # 抢占式和非抢占式  
 抢占式 preempt，默认，如果主节点出故障，从节点获取 vip，主节点修复后，如果其优先级比当前 master 节点的优先级高，则抢回 vip  
     
-切换节点可能造成一些延迟，如客户端原本记住了 vip 对于的 mac 地址（arp 缓存），切换节点后原来的 mac 地址和 vip 不对应，客户端会卡一会更新 arp 缓存信息  
+切换节点可能造成一些延迟，如客户端原本记住了 vip 对应的 mac 地址（arp 缓存），切换节点后原来的 mac 地址和 vip 不对应，客户端会卡一会更新 arp 缓存信息  
     
 建议设置为非抢占，防止网络抖动  
     
@@ -399,7 +429,6 @@ notify_master "/etc/keepalived/notify.sh"
 需要各 keepalived 节点的配置 `vrrp_instance` 中的 state 均要配置为 `BACKUP`  
     
 不能启用 vrrp_strict  
-    
     
 # Keepalived Master/Backup 模式  
 ## master/backup 单主架构  
